@@ -1,0 +1,85 @@
+id: SYS-FREEZE-01
+title: 죽지 않았다 — 살아 있는데 대답이 없다
+kind: single
+category: system
+difficulty: 3
+duration: 20m
+tags: [프로세스, 헬스체크, 재시작금지, 증거보존]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   proc_pause kt66-neobank → docker inspect State.Status: running → paused
+#   해제 시 running 으로 정확히 복귀. 컨테이너는 살아 있고 포트도 열려 있다.
+#
+# 이 시나리오의 값어치는 **오답이 자연스럽다**는 데 있다. 서비스가 안 되면
+# 누구나 먼저 재시작한다. 재시작하면 실제로 복구된다 — 그리고 원인은 영원히
+# 사라진다. 다음 주에 똑같이 재발한다.
+
+brief: |
+  NeoBank(8003)가 응답하지 않는다. 창은 계속 돌기만 하고 오류도 안 뜬다.
+  담당자는 "컨테이너는 떠 있다"고 한다.
+
+steps:
+  - at: 0
+    via: injector
+    action: proc_pause
+    target: kt66-neobank
+    note: 얼린다. 프로세스도 포트도 그대로다 — 죽은 것이 아니다
+
+sla:
+  detect: 5m
+  mitigate: 15m
+
+ground_truth:
+  root_cause: >-
+    kt66-neobank 컨테이너가 **정지(paused)** 상태다. 죽은 것이 아니라 얼어 있다.
+    프로세스 목록에도 있고 포트도 LISTEN 이지만 스케줄러가 CPU 를 주지 않으므로
+    accept 된 연결이 처리되지 않는다. 그래서 오류가 아니라 **무응답**이다.
+  chain:
+    - "브라우저: 응답 없음. 오류 페이지가 아니라 타임아웃 — 연결은 됐다는 뜻이다"
+    - "docker ps: Up 으로 보인다. 여기서 '정상'이라고 판단하면 끝난다"
+    - "docker inspect State.Status = paused ← 여기서만 드러난다"
+    - "로그: 얼어붙은 시각 이후로 한 줄도 없다. 마지막 줄이 시각을 알려 준다"
+  key_insight: >-
+    **죽음과 무응답은 다른 사건이고, 조치도 다르다.** 죽었으면 왜 죽었는지 종료
+    코드가 남지만, 얼어 있으면 아무것도 안 남는다 — 지금 살아 있는 상태 그 자체가
+    유일한 증거다. 그래서 재시작이 가장 비싼 선택이 된다. 증거를 지우고 복구하는
+    것이기 때문이다. `docker ps` 의 Up 을 정상으로 읽는 습관이 여기서 깨져야 한다.
+
+  checks:
+    - id: frz-state
+      type: keyword
+      any: ["paused", "정지", "얼", "freeze", "일시.*중지"]
+      points: 25
+      note: 상태가 paused 임을 특정했는가 — 이걸 못 하면 나머지는 추측이다
+    - id: frz-notdead
+      type: keyword
+      any: ["죽[지은]|다운.*아니", "살아", "무응답", "타임아웃", "응답만"]
+      points: 20
+      note: 죽은 것이 아니라 무응답이라는 구분을 했는가
+    - id: frz-eff
+      type: keyword
+      any: ["inspect", "docker ps", "State", "헬스", "포트|LISTEN"]
+      points: 15
+      note: 무엇을 보고 그렇게 판단했는지 근거를 남겼는가
+    - id: frz-eviz
+      type: keyword
+      any: ["로그.*확보|보존|수집", "마지막.*(로그|줄|시각)", "증거"]
+      points: 20
+      note: 복구 전에 증거를 확보했는가
+    - id: frz-act
+      type: evidence_kind
+      kind: action
+      points: 20
+      note: 조치를 실행했는가 (unpause 든 재시작이든 기록이 있어야 한다)
+
+  forbidden:
+    - "(바로|일단|우선).*(재시작|restart).*(했|하고)"
+    - "docker ps.*정상"
+
+expected_actions:
+  - docker inspect 로 State.Status 를 확인 — ps 의 Up 만 보고 정상이라 하지 않는다
+  - 마지막 로그 시각을 기록해 언제부터 멈췄는지 특정
+  - unpause 로 복구 (재생성·재시작은 증거를 지운다)
+  - 누가 언제 pause 를 걸었는지 조회 — 사람이 한 것인지 도구가 한 것인지
+  - 헬스체크가 이 상태를 못 잡은 이유를 확인하고 감시 항목을 보완

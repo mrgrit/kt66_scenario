@@ -1,0 +1,96 @@
+id: LOAD-LAYER-01
+title: 어느 계층이 병목인가 — 앞이 아니다
+kind: composite
+category: load
+difficulty: 4
+duration: 35m
+tags: [계층절단, 병목, 부하, 백엔드]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   load_http conc=10 → attacker 에서 요청 폭주 프로세스 확인, 해제 시 정리
+#   load_slow_backend ms=800 → kt66-web eth0 에 netem delay 800ms, 해제 시 제거
+#
+# ※ load_slow_backend 는 검증 중에 고쳤다. 원래 web 의 **앞다리**(eth1/dmz)에
+#   지연을 걸고 있었는데, 그러면 앞단까지 같이 느려져서 WAF 와 백엔드를 가를
+#   수가 없다 — 이 주입의 목적이 정확히 그 구분인데 정반대로 동작했다.
+#   지금은 뒷다리(eth0/int)에만 걸리므로 계층 절단이 실제로 성립한다.
+
+brief: |
+  접속이 몰리는 시간대에 응답이 급격히 느려진다. 앞단 장비(fw·IPS)는 부하가
+  낮고, 웹 서버 CPU 도 여유가 있다. 그런데 사용자는 계속 느리다고 한다.
+
+steps:
+  - at: 0
+    via: injector
+    action: load_http
+    target: kt66-attacker
+    params: {conc: 20, url: "http://10.20.30.1:8001/"}
+    note: 체인 전체에 요청을 몰아친다 — 부하 자체는 진짜다
+  - at: 0
+    via: injector
+    action: load_slow_backend
+    target: kt66-web
+    params: {ms: 800}
+    note: 백엔드로 나가는 구간에만 지연. 앞단은 멀쩡하다
+
+sla:
+  detect: 12m
+  mitigate: 30m
+
+ground_truth:
+  root_cause: >-
+    부하가 걸린 것은 사실이지만, 실제 병목은 **web 이 백엔드를 부르는 구간**에 있다.
+    앞단(fw·IPS)과 web 자체는 여유가 있다. 요청 하나하나가 백엔드 응답을 기다리며
+    묶여 있어서, 부하가 조금만 올라도 처리량이 무너진다.
+  chain:
+    - "부하 증가와 느려짐이 함께 관측된다 — 부하 탓이라고 결론 내기 쉽다"
+    - "그런데 앞단 장비의 자원은 여유롭다. 여기가 병목이면 자원이 찼어야 한다"
+    - "web 자체도 CPU 여유. 정적 응답은 빠르다"
+    - "백엔드를 부르는 요청만 느리다 ← 계층이 갈린다"
+    - "web 에서 백엔드로 직접 재보면 왕복 지연이 크다. 원인은 이 구간이다"
+    - "부하는 원인이 아니라 **증폭기**다. 병목이 없었으면 같은 부하를 견뎠다"
+  key_insight: >-
+    **병목은 대개 맨 앞이 아니다.** 앞단은 관측하기 쉬워서 먼저 보게 되고, 여유가
+    있으면 '괜찮다'고 넘어간다. 그러나 여유가 있다는 것은 병목이 아니라는 뜻이지
+    문제가 없다는 뜻이 아니다 — 오히려 **앞이 여유로운데 전체가 느리다면 병목은
+    반드시 뒤에 있다.** 그리고 부하와 병목을 분리해야 한다. 부하를 줄이면 증상은
+    가라앉지만 병목은 그대로 남아, 다음 트래픽 증가에 똑같이 무너진다.
+
+  checks:
+    - id: lay-cut
+      type: keyword
+      any: ["계층|구간별|단계.*나눠|앞단.*뒤|각.*계층"]
+      points: 25
+      note: 계층별로 나눠서 측정했는가
+    - id: lay-front
+      type: keyword
+      any: ["앞단.*여유|fw.*정상|IPS.*정상|병목.*아니"]
+      points: 20
+      note: 앞단을 근거를 대고 배제했는가
+    - id: lay-back
+      type: keyword
+      any: ["백엔드", "int|10\\.20\\.40", "뒤.*구간|후단", "800ms|지연"]
+      points: 25
+      note: 백엔드 구간을 병목으로 특정했는가
+    - id: lay-amp
+      type: keyword
+      any: ["부하.*원인.*아니|증폭|병목.*따로|부하.*줄여도"]
+      points: 15
+      note: 부하와 병목을 분리했는가
+    - id: lay-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+
+  forbidden:
+    - "부하.*(때문|원인).*(증설|스케일).*(필요|해결)"
+    - "앞단.*정상.*(이므로|따라서).*문제.*없"
+
+expected_actions:
+  - 각 계층에서 응답 시간을 따로 측정해 어디서 늘어나는지 찾는다
+  - 정적 응답과 백엔드 호출을 나눠서 비교
+  - web 에서 백엔드로 직접 왕복 지연을 실측
+  - 부하 차단은 임시조치로 기록하고, 병목 구간을 별도 과제로 남긴다
+  - 계층별 응답시간을 상시 관측 항목으로 추가

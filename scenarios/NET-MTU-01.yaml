@@ -1,0 +1,87 @@
+id: NET-MTU-01
+title: ping 은 되는데 서비스는 안 된다
+kind: single
+category: network
+difficulty: 4
+duration: 30m
+tags: [MTU, 단편화, 도달성오판, 터널]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   net_mtu kt66-web mtu=1200 → ip link eth0: mtu 1500 → 1200, 해제 시 1500 복귀.
+#   주입기는 걸기 전 MTU 를 읽어 두었다가 그 값으로 되돌린다.
+#
+# 왜 이 시나리오가 kt66 에서 현실적인가: gpu-gw 가 WireGuard 터널로 DGX 와
+# 붙어 있다. 터널 구간은 실제로 MTU 가 줄어드는 대표적인 자리이고, 실무에서
+# 가장 오래 헤매는 유형이 정확히 이것이다.
+
+brief: |
+  웹 서비스가 "가끔 멈춘다"는 신고가 있다. 첫 화면은 뜨는데 큰 페이지나
+  파일 다운로드에서 멈춘다. 네트워크 담당자는 ping 이 정상이라 문제없다고 한다.
+
+steps:
+  - at: 0
+    via: injector
+    action: net_mtu
+    target: kt66-web
+    params: {mtu: 1200}
+    note: MTU 를 낮춘다. 작은 패킷만 통과한다 — 도달성 테스트는 전부 통과한다
+
+sla:
+  detect: 12m
+  mitigate: 25m
+
+ground_truth:
+  root_cause: >-
+    경로의 **MTU 가 1200 으로 줄었다.** 작은 패킷은 그대로 통과하므로 ping·TCP
+    핸드셰이크·짧은 응답은 전부 정상이다. 큰 페이로드가 필요한 순간에만 막힌다.
+  chain:
+    - "짧은 요청은 성공, 큰 응답에서 멈춤 — 크기에 따라 갈린다"
+    - "ping 정상, 포트 연결 정상 — 그래서 '네트워크는 문제없다'로 판정하게 된다"
+    - "ping -s 로 크기를 키우면 어느 크기부터 실패하는지 경계가 나온다"
+    - "인터페이스 MTU 가 1200. 경로 어딘가가 아니라 이 홉에서 줄었다"
+    - "TCP MSS 협상은 자기 인터페이스 기준이라, 중간에서 줄면 알아채지 못한다"
+  key_insight: >-
+    **도달성과 전송 가능성은 다르다.** ping 이 확인해 주는 것은 '작은 패킷 하나가
+    갔다 왔다'이지 '서비스가 된다'가 아니다. 크기에 따라 갈리는 증상을 만나면
+    가설의 1순위는 MTU 여야 한다 — 그리고 그것을 확인하는 방법은 크기를 바꿔 가며
+    재보는 것이다. "간헐적"이라는 신고를 그대로 믿으면 안 된다. 실제로는 간헐이
+    아니라 **크기에 대해 결정적**이다. 재현 조건이 시간이 아니라 크기에 있다.
+
+  checks:
+    - id: mtu-size
+      type: keyword
+      any: ["MTU", "크기.*따라|큰.*(패킷|응답|파일)", "단편화|fragment"]
+      points: 30
+      note: MTU 를 원인으로 특정했는가
+    - id: mtu-probe
+      type: keyword
+      any: ["ping -s|-M do|크기.*바꿔|경계.*찾", "1200|1500"]
+      points: 25
+      note: 크기를 바꿔 가며 경계를 실측했는가
+    - id: mtu-pingfalse
+      type: keyword
+      any: ["ping.*정상.*(그러나|하지만|아니)", "도달.*(과|와).*(전송|서비스)", "ping.*충분.*아니"]
+      points: 20
+      note: ping 정상이 정상 판정 근거가 못 됨을 짚었는가
+    - id: mtu-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+    - id: mtu-scope
+      type: keyword
+      any: ["터널|WireGuard|다른.*구간|경로.*전체|나머지"]
+      points: 10
+      note: 같은 원인이 다른 구간에도 있는지 넓혀 봤는가
+
+  forbidden:
+    - "ping.*정상.*(이므로|따라서).*(네트워크|정상)"
+    - "간헐.*(원인|장애).*재부팅"
+
+expected_actions:
+  - 증상이 시간이 아니라 크기에 따라 갈린다는 것을 먼저 확정
+  - ping -s 로 통과하는 최대 크기를 실측해 경계를 찾는다
+  - 경로상 각 홉의 MTU 를 대조해 어디서 줄었는지 특정
+  - 원래 값으로 복원하고 큰 응답으로 재검증
+  - 터널 구간 등 MTU 가 줄 수 있는 자리를 전수 점검

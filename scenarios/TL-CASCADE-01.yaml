@@ -1,0 +1,115 @@
+id: TL-CASCADE-01
+title: 작은 지연이 커넥션을 마르게 하고, 결국 멈춘다
+kind: timeline
+category: load
+difficulty: 5
+duration: 40m
+tags: [연쇄, 자원고갈, 초기판단, 조기차단]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   net_delay attacker ms=300 jitter=80  → netem delay 300ms 80ms
+#   load_slow_backend web ms=800         → web eth0(int 쪽)에 netem delay 800ms
+#   load_conn_exhaust attacker conns=150 → ncat 세션이 슬롯을 붙잡는다(41/40 확인)
+#   cpu_throttle aicompanion cpus=0.1    → cgroup cpu.max 제한
+#   proc_pause kt66-neobank              → paused (죽지 않고 무응답)
+#   전부 개별 검증 완료. 해제 경로도 각각 확인했다.
+#
+# 이 시나리오는 **각 단계가 다음 단계를 쉽게 만든다.** 지연이 있으면 커넥션이
+# 더 빨리 마르고, 커넥션이 마르면 CPU 제한이 더 크게 아프다.
+
+brief: |
+  응답이 조금 느려졌다. 오류는 없고 가용성 지표도 정상이다.
+  "지켜보자"는 의견이 나온다.
+
+steps:
+  - at: 0
+    via: injector
+    action: net_delay
+    target: kt66-attacker
+    params: {ms: 300, jitter: 80}
+    note: 아주 작은 지연. 이 시점에는 아무도 티켓을 안 연다
+  - at: 8m
+    via: injector
+    action: load_slow_backend
+    target: kt66-web
+    params: {ms: 800}
+    note: 백엔드 구간 지연이 더해진다. 요청이 오래 묶인다
+  - at: 16m
+    via: injector
+    action: load_conn_exhaust
+    target: kt66-attacker
+    params: {conns: 150}
+    note: 오래 묶인 요청이 쌓여 슬롯이 마른다
+  - at: 26m
+    via: injector
+    action: cpu_throttle
+    target: kt66-aicompanion
+    params: {cpus: 0.1}
+    note: 남은 여유마저 조인다
+  - at: 34m
+    via: injector
+    action: proc_pause
+    target: kt66-neobank
+    note: 한 서비스가 완전히 응답을 멈춘다
+
+sla:
+  detect: 10m
+  mitigate: 35m
+
+ground_truth:
+  root_cause: >-
+    작은 지연에서 시작한 문제가 **자원 고갈로 번지며 증폭**됐다. 지연 자체는 견딜 수
+    있는 크기였지만, 지연이 요청 점유 시간을 늘리고, 늘어난 점유가 커넥션 슬롯을
+    마르게 하고, 마른 슬롯이 재시도를 부르고, 재시도가 부하를 키운다.
+  chain:
+    - "t+0 300ms 지연. 체감은 거의 없다 — 여기서 기록만 해 둬도 나중이 달라진다"
+    - "t+8 백엔드 800ms 추가. 요청 하나가 붙잡는 시간이 서너 배로 늘었다"
+    - "t+16 커넥션 고갈. 점유 시간 × 요청률 = 필요한 슬롯 수, 이 곱이 상한을 넘었다"
+    - "t+26 CPU 제한. 남은 처리 여유가 사라진다"
+    - "t+34 한 서비스 무응답. 겉보기 원인은 마지막 단계지만 실제 원인은 t+0 이다"
+  key_insight: >-
+    **연쇄 장애의 원인은 마지막에 무너진 것이 아니라 처음에 밀린 것이다.** 그리고
+    각 단계는 그 시점에는 대응할 가치가 없어 보인다 — 300ms 는 아무도 티켓을 열지
+    않는 크기다. 그러나 지연은 시간을 소비하고, 시간은 커넥션을 소비하고, 커넥션은
+    가용성을 소비한다. **점유 시간 × 요청률 = 필요한 동시 슬롯** 이라는 관계 하나만
+    알고 있으면 t+8 에서 t+16 을 예측할 수 있다. 대응의 값어치는 늦을수록 급격히
+    떨어진다 — t+0 에서는 설정 하나면 되고, t+34 에서는 서비스가 이미 멎었다.
+
+  checks:
+    - id: csc-origin
+      type: keyword
+      any: ["최초|처음|시작.*지연|근원|t\\+0|초기.*원인"]
+      points: 30
+      note: 마지막이 아니라 최초 원인을 지목했는가 — 이 시나리오의 핵심
+    - id: csc-chain
+      type: keyword
+      any: ["연쇄|번[졌지]|증폭|이어[져진]|파급|누적"]
+      points: 20
+      note: 단계가 서로를 악화시킨 관계를 설명했는가
+    - id: csc-model
+      type: keyword
+      any: ["점유.*시간|동시.*(연결|슬롯)|요청률|곱|리틀|용량.*계산"]
+      points: 20
+      note: 지연이 커넥션을 먹는 관계를 수치로 설명했는가
+    - id: csc-early
+      type: keyword
+      any: ["일찍|초기.*대응|조기|먼저.*차단|미리"]
+      points: 15
+      note: 조기 개입의 가치를 짚었는가
+    - id: csc-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+
+  forbidden:
+    - "(neobank|마지막|최종).*(원인|때문)"
+    - "지켜보|추이.*관찰.*종결"
+
+expected_actions:
+  - 증상 시각을 시간축에 늘어놓고 무엇이 먼저였는지 정렬
+  - 최초 지연 시점을 원인으로 지목하고 마지막 증상과 구분
+  - 점유 시간과 요청률로 필요한 동시 슬롯을 계산해 고갈을 설명
+  - 상류(지연)부터 제거 — 하류(무응답 서비스)만 살리면 다시 무너진다
+  - 작은 지연에도 티켓을 여는 기준(응답시간 분위수)을 제안

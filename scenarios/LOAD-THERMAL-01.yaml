@@ -1,0 +1,94 @@
+id: LOAD-THERMAL-01
+title: IT 부하가 시설 온도를 올린다 — 두 팀의 경계에서
+kind: composite
+category: facility
+difficulty: 4
+duration: 35m
+tags: [부하발열, IT시설연계, 협업, 원인위치]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   load_cpu kt66-gpu-gw workers=2 → 컨테이너 loadavg 0.25 → 0.64 상승 확인.
+#     envsim 이 컨테이너 CPU 사용률을 실측해 발열로 환산하므로, 부하가 오르면
+#     해당 아일 온도가 실제로 오른다(시뮬레이션 상수가 아니라 측정 기반).
+#   airflow_block → AIRFLOW_SHORT@2F/aisle-A/air 경보 발생, 해제 시 소멸.
+#
+# 두 주입은 계통이 다르다 — 하나는 IT(injector), 하나는 시설(envsim)이다.
+# 이 시나리오의 목적은 그 경계에서 원인을 찾게 하는 것이다.
+
+brief: |
+  2F A아일 온도가 오르고 있다. 시설팀은 냉방이 정상이라고 하고, 서버팀은
+  자기들은 평소와 다를 게 없다고 한다. 온도는 계속 오른다.
+
+steps:
+  - at: 0
+    via: injector
+    action: load_cpu
+    target: kt66-gpu-gw
+    params: {workers: 3}
+    note: IT 쪽에서 발열이 늘어난다 — 시설 지표에 나타난다
+  - at: 0
+    via: envsim
+    fault: airflow_block
+    target: "*"
+    note: 기류가 막힌다 — 같은 열을 못 빼낸다
+
+sla:
+  detect: 10m
+  mitigate: 30m
+
+ground_truth:
+  root_cause: >-
+    **양쪽 다 원인이다.** IT 쪽에서 CPU 부하가 늘어 발열이 커졌고, 시설 쪽에서는
+    기류가 막혀 그 열을 못 빼내고 있다. 어느 한쪽만 보면 각자 "우리는 정상"이
+    맞는 말이 된다 — 냉방 장비는 정상 가동 중이고, 서버는 정상 동작 중이다.
+  chain:
+    - "온도 상승. 냉방 장비 상태는 정상(가동 중, 고장 없음)"
+    - "그런데 기류 경보(AIRFLOW_SHORT)가 떠 있다 — 장비가 아니라 경로 문제다"
+    - "동시에 해당 아일의 IT 부하가 평소보다 높다 — 들어오는 열 자체가 늘었다"
+    - "열은 들어오는 양과 빠지는 양의 차다. 지금은 양쪽이 동시에 나빠졌다"
+    - "한쪽만 고치면 상승 속도는 줄지만 방향은 그대로다"
+  key_insight: >-
+    **데이터센터에서 IT 와 시설은 같은 물리량을 공유한다.** 전력과 열이다.
+    서버팀의 부하 결정이 시설팀의 온도로 나타나고, 시설팀의 기류 상태가 서버의
+    스로틀로 나타난다. 그래서 "우리 쪽은 정상"이라는 말이 양쪽 다 사실이면서
+    문제가 진행될 수 있다. 이 경계에서 필요한 것은 책임 소재가 아니라 **열수지**다
+    — 들어오는 열과 빠지는 열을 각각 수치로 놓고 보면 논쟁이 끝난다.
+
+  checks:
+    - id: thm-both
+      type: keyword
+      any: ["양쪽|둘 다|두.*원인|IT.*시설|동시"]
+      points: 30
+      note: 원인이 양쪽에 걸쳐 있음을 짚었는가
+    - id: thm-load
+      type: keyword
+      any: ["부하|CPU|발열|IT.*쪽|서버.*부하"]
+      points: 20
+      note: IT 부하 증가를 확인했는가
+    - id: thm-air
+      type: keyword
+      any: ["기류|AIRFLOW|재순환|경로|막"]
+      points: 20
+      note: 기류 문제를 확인했는가 (냉방 장비 고장과 구분)
+    - id: thm-balance
+      type: keyword
+      any: ["열수지|들어오는.*빠지|균형|발열량|제거.*열"]
+      points: 15
+      note: 열수지 관점으로 정리했는가
+    - id: thm-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+
+  forbidden:
+    - "냉방.*정상.*(이므로|따라서).*(서버|IT).*문제"
+    - "서버.*정상.*(이므로|따라서).*시설.*문제"
+
+expected_actions:
+  - 냉방 장비 상태와 기류 상태를 나눠서 확인 — 장비 정상이 기류 정상은 아니다
+  - 해당 아일의 IT 부하 추이를 시설 온도와 같은 시간축에 놓고 비교
+  - 들어오는 열과 빠지는 열을 각각 수치로 정리
+  - 양쪽 조치를 동시에 진행하고 각각의 기여를 재측정
+  - IT 부하 계획과 시설 용량을 함께 검토하는 절차를 제안

@@ -1,0 +1,87 @@
+id: SYS-OOM-01
+title: OOM — 앱이 샌 것인가, 한도를 잘못 준 것인가
+kind: single
+category: system
+difficulty: 3
+duration: 25m
+tags: [OOM, 자원한도, 용량산정, 오귀인]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   mem_limit kt66-govportal mb=64 → HostConfig.Memory 0 → 67108864 (64MB)
+#   해제는 호스트 RAM(약 31GB)까지 올리는 방식이다. 도커 update API 로는 제한을
+#   '없앨' 수 없기 때문이다(Memory=0 은 무시, -1 은 거부). 실사용상 무제한과
+#   같지만 inspect 의 Memory 는 0 이 아니라 큰 값으로 남는다 — 학생이 이 값을
+#   보고 "아직 제한이 걸려 있다"고 오독할 수 있으므로 강사가 알고 있어야 한다.
+
+brief: |
+  govportal(8004)이 접속이 몰리면 죽는다. 개발팀은 "메모리 누수 같다"며
+  코드를 뜯어보고 있다. 벌써 이틀째다.
+
+steps:
+  - at: 0
+    via: injector
+    action: mem_limit
+    target: kt66-govportal
+    params: {mb: 64}
+    note: 상한을 64MB 로 조인다. 앱은 그대로인데 커널이 죽인다
+
+sla:
+  detect: 10m
+  mitigate: 20m
+
+ground_truth:
+  root_cause: >-
+    애플리케이션이 아니라 **컨테이너 메모리 상한이 64MB 로 설정되어** 있다. 앱의
+    정상 사용량이 그 한도를 넘는 순간 커널의 OOM killer 가 프로세스를 죽인다.
+    코드는 이틀 전과 같다 — 바뀐 것은 한도다.
+  chain:
+    - "부하가 조금만 올라가면 죽는다. 한가할 때는 멀쩡하다"
+    - "종료 코드 137. 여기까지는 SIGKILL 이라는 것만 안다"
+    - "그런데 죽인 주체가 다르다 — dmesg/OOMKilled 플래그가 커널이 죽였다고 말한다"
+    - "HostConfig.Memory = 67108864 (64MB). 이 서비스의 정상 사용량보다 작다"
+    - "코드에는 아무 변경이 없다. 누수라면 시간에 비례해 늘어야 하는데 부하에 비례한다"
+  key_insight: >-
+    **OOM 은 '앱이 메모리를 너무 썼다'는 뜻이 아니라 '준 것보다 많이 썼다'는 뜻이다.**
+    분자와 분모 중 어느 쪽이 틀렸는지 먼저 갈라야 한다. 누수라면 시간에 비례해 늘고,
+    한도 문제라면 부하에 비례해 터진다 — 이 구분 하나로 이틀이 30분이 된다.
+    137 만 보고 SYS-CRASH-01 과 같은 사건이라고 결론 내면 오답이다. 종료 코드는
+    같고 죽인 주체가 다르다.
+
+  checks:
+    - id: oom-limit
+      type: keyword
+      any: ["한도|상한|limit", "64", "Memory", "제한.*설정"]
+      points: 25
+      note: 설정된 한도값을 찾아 특정했는가
+    - id: oom-kernel
+      type: keyword
+      any: ["OOM", "커널", "OOMKilled", "dmesg"]
+      points: 20
+      note: 죽인 주체가 커널임을 확인했는가
+    - id: oom-notleak
+      type: keyword
+      any: ["누수.*아니", "부하.*비례", "시간.*비례.*아니", "코드.*변경.*없"]
+      points: 25
+      note: 누수 가설을 근거를 대고 배제했는가 — 이 시나리오의 핵심
+    - id: oom-size
+      type: keyword
+      any: ["실사용|사용량|측정|산정", "얼마.*필요", "적정"]
+      points: 15
+      note: 적정 한도를 수치로 판단했는가 (그냥 올리는 것은 판단이 아니다)
+    - id: oom-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+
+  forbidden:
+    - "메모리 누수.*(원인|확실|맞)"
+    - "코드.*수정.*필요"
+
+expected_actions:
+  - OOMKilled 플래그와 종료 코드로 커널이 죽였음을 확정
+  - 설정된 한도와 실제 사용량을 나란히 놓고 비교
+  - 시간 비례(누수) vs 부하 비례(한도)로 가설을 가른다
+  - 실측 사용량 기준으로 적정 한도를 산정해 조정 — 무제한은 답이 아니다
+  - 같은 방식으로 한도가 설정된 다른 서비스를 전수 점검

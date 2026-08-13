@@ -1,0 +1,84 @@
+id: SYS-GHOST-01
+title: 유령 — 살아 있는데 아무도 못 닿는다
+kind: single
+category: system
+difficulty: 3
+duration: 20m
+tags: [네트워크분리, 존, 고정IP, 복구절차]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   net_isolate kt66-adminconsole → 붙은 네트워크 수 1 → 0
+#   해제 시 1 로 복귀. 주입기는 끊기 전에 존별 고정 IP 를 기록해 두고
+#   되붙일 때 같은 주소로 복원한다. 기록을 안 해 두면 주소가 바뀌고
+#   존 체계가 통째로 어긋난다 — 학생이 손으로 복구할 때 흔히 저지르는 실수다.
+
+brief: |
+  관리 콘솔에 접속이 안 된다. 서버 담당자는 "프로세스는 정상이고 로그도
+  계속 쌓인다"고 한다. 실제로 컨테이너 안에서는 아무 이상이 없다.
+
+steps:
+  - at: 0
+    via: injector
+    action: net_isolate
+    target: kt66-adminconsole
+    note: 모든 네트워크에서 떼어낸다. 안에서는 정상, 밖에서는 없는 것과 같다
+
+sla:
+  detect: 5m
+  mitigate: 15m
+
+ground_truth:
+  root_cause: >-
+    kt66-adminconsole 이 **모든 도커 네트워크에서 분리**됐다. 컨테이너와 그 안의
+    프로세스는 완전히 정상이다. 다만 네트워크 인터페이스가 없어서 밖에서 닿을 수
+    없고, 자기도 밖으로 못 나간다.
+  chain:
+    - "밖에서: 접속 불가. ping 도 안 된다 — 주소 자체가 없다"
+    - "안에서: 프로세스 정상, 포트 LISTEN, 로그도 계속 쌓인다"
+    - "inspect NetworkSettings.Networks 가 비어 있다 ← 여기서 드러난다"
+    - "서비스 로그에는 아무 오류가 없다. 요청이 아예 도착하지 않았기 때문이다"
+  key_insight: >-
+    **'서비스 장애'와 '도달 불가'는 다른 사건이다.** 안에서 본 정상과 밖에서 본
+    장애가 동시에 참일 수 있다는 것을 몸으로 아는 것이 이 시나리오의 목적이다.
+    그리고 복구에 함정이 있다 — 다시 붙일 때 **원래 존과 원래 고정 IP** 로 붙여야
+    한다. 아무 네트워크에나 붙이면 서비스는 살아나고 존 설계는 조용히 무너진다.
+    살아난 것처럼 보이기 때문에 아무도 모른다.
+
+  checks:
+    - id: gho-net
+      type: keyword
+      any: ["네트워크.*(분리|제거|없|끊)", "Networks", "인터페이스.*없", "isolate"]
+      points: 30
+      note: 네트워크 분리임을 특정했는가
+    - id: gho-inout
+      type: keyword
+      any: ["안에서.*정상|내부.*정상", "도달", "밖에서", "요청.*도착.*안"]
+      points: 20
+      note: 안/밖 관점을 나눠서 확인했는가
+    - id: gho-ip
+      type: keyword
+      any: ["고정.*IP|원래.*주소|같은.*IP", "10\\.20\\.", "존.*복원|원래.*존"]
+      points: 25
+      note: 원래 존·원래 주소로 되돌려야 한다는 것을 알았는가 — 여기가 함정
+    - id: gho-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+    - id: gho-verify
+      type: keyword
+      any: ["확인|검증|재확인", "다시.*접속", "정상.*확인"]
+      points: 10
+      note: 복구 후 실제로 확인했는가
+
+  forbidden:
+    - "서비스.*(죽|다운|중지).*원인"
+    - "재생성|다시.*만들"
+
+expected_actions:
+  - 안(프로세스·포트·로그)과 밖(접속·ping)을 나눠서 각각 확인
+  - inspect 로 붙은 네트워크가 없음을 확정
+  - 원래 존과 고정 IP 를 대장(assets)에서 확인한 뒤 같은 주소로 재연결
+  - 복구 후 존 경계가 설계대로인지 확인 — 접속만 되면 끝이 아니다
+  - 누가 끊었는지, 변경 승인이 있었는지 조회

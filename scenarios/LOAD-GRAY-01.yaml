@@ -1,0 +1,93 @@
+id: LOAD-GRAY-01
+title: 회색 장애 — 죽지 않아서 아무도 안 부른다
+kind: composite
+category: load
+difficulty: 4
+duration: 35m
+tags: [회색장애, 수치화, 자원제한, 지연]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   cpu_throttle kt66-aicompanion cpus=0.05 → cgroup cpu.max 가 제한값으로 설정.
+#     해제 시 `max 100000` 으로 풀린다. 다만 docker inspect 의 NanoCpus 는
+#     낡은 값이 남는다 — inspect 만 보면 '안 풀렸다'고 오독하게 된다(실제로
+#     검증 중에 그렇게 오판했다). cgroup 을 봐야 한다.
+#   net_delay kt66-attacker ms=300 jitter=80 → netem delay 300ms 80ms, 해제 시 제거.
+
+brief: |
+  AI 상담 서비스가 "느리다"는 말이 두 주째 나온다. 장애로 등록된 적은 없다.
+  담당자는 "가끔 그렇고 곧 괜찮아진다"고 한다. 죽은 적은 한 번도 없다.
+
+steps:
+  - at: 0
+    via: injector
+    action: cpu_throttle
+    target: kt66-aicompanion
+    params: {cpus: 0.1}
+    note: CPU 를 조인다. 죽지 않고 느려진다
+  - at: 0
+    via: injector
+    action: net_delay
+    target: kt66-attacker
+    params: {ms: 300, jitter: 80}
+    note: 경로에도 지연을 얹는다. 두 원인이 같은 증상으로 합쳐진다
+
+sla:
+  detect: 15m
+  mitigate: 30m
+
+ground_truth:
+  root_cause: >-
+    원인이 **둘**이고 증상이 하나다. 서비스 쪽은 CPU 할당이 조여 있어 처리가 느리고,
+    경로 쪽에는 300ms±80ms 의 지연이 얹혀 있다. 어느 하나만 고치면 절반만 좋아지고,
+    "고쳤는데 여전히 느리다"가 된다.
+  chain:
+    - "증상: 느리다. 오류율은 정상, 가용성 지표도 정상 — 그래서 장애가 아니다"
+    - "체감을 수치로 바꾸면(응답시간 분포) 꼬리가 길다. 평균은 멀쩡해 보인다"
+    - "서버에서 자체 처리 시간을 재면 이미 느리다 → 자원 쪽 원인 하나"
+    - "네트워크 왕복을 따로 재면 300ms 전후에 흔들림이 있다 → 경로 쪽 원인 하나"
+    - "둘의 합이 체감이다. 하나만 제거하면 개선은 되지만 해결은 아니다"
+  key_insight: >-
+    **죽지 않는 장애가 가장 오래 산다.** 임계값 기반 감시는 살아 있는 것을 정상으로
+    보고, 사용자는 불평하지만 티켓은 안 열린다. 이 시나리오의 훈련은 두 가지다.
+    하나는 **체감을 수치로 바꾸는 것** — 평균이 아니라 분포(꼬리)를 봐야 한다.
+    다른 하나는 **원인이 하나라는 가정을 버리는 것** — 복합 원인에서는 첫 원인을
+    찾은 순간이 가장 위험하다. 찾았다고 멈추면 나머지 절반이 그대로 남는다.
+
+  checks:
+    - id: gry-quant
+      type: keyword
+      any: ["응답.*시간|p9[059]|분포|꼬리|측정.*수치|ms"]
+      points: 25
+      note: 체감을 수치로 바꿨는가
+    - id: gry-two
+      type: keyword
+      any: ["두.*원인|원인.*둘|복합|각각|둘 다|합"]
+      points: 30
+      note: 원인이 둘임을 인식했는가 — 이 시나리오의 핵심
+    - id: gry-cpu
+      type: keyword
+      any: ["CPU.*제한|cgroup|throttle|자원.*한도|할당"]
+      points: 15
+      note: 자원 제한 쪽 원인을 특정했는가
+    - id: gry-net
+      type: keyword
+      any: ["지연|latency|RTT|300|지터|jitter"]
+      points: 15
+      note: 경로 지연 쪽 원인을 특정했는가
+    - id: gry-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+
+  forbidden:
+    - "원인.*(찾았|확인).*(조치|해결).*종결"
+    - "가끔.*그런|일시적.*(현상|이므로)"
+
+expected_actions:
+  - 체감을 응답시간 분포로 바꿔 기록 (평균이 아니라 꼬리를 본다)
+  - 서버 자체 처리시간과 네트워크 왕복을 분리해 각각 측정
+  - 원인을 하나 찾은 뒤에도 남은 지연이 설명되는지 확인
+  - 두 원인을 각각 조치하고 각각 재측정
+  - 회색 장애를 잡을 감시(응답시간 분위수)를 추가

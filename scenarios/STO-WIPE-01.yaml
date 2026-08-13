@@ -1,0 +1,96 @@
+id: STO-WIPE-01
+title: 조사하러 갔더니 로그가 비어 있다
+kind: composite
+category: security
+difficulty: 4
+duration: 35m
+tags: [증적훼손, 로그폭주, 조사불능, 보고]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   log_flood kt66-web → /var/log/kt66-inj-flood.log 가 0 → 100,360 바이트
+#   log_tamper kt66-web path=/var/log/apache2/juice_port_access.log
+#     3,442,684 → 0 바이트. 해제 시 3,442,684 로 **바이트 단위까지** 복원.
+#
+# ※ log_tamper 는 이 검증 과정에서 고쳤다. 기본 경로가 항상 0바이트인 파일이라
+#   "지웠는데 아무것도 안 사라지는" 상태였다. 지금은 실제로 쌓이는 사이트별
+#   로그를 지우고, 빈 파일을 지정하면 조용히 성공하는 대신 거부한다.
+
+brief: |
+  WAF 경보가 급증했다는 연락을 받고 조사에 들어갔다. 그런데 해당 사이트의
+  접근 로그가 0바이트다. 다른 로그는 오늘치가 폭주하듯 쌓여 있다.
+
+steps:
+  - at: 0
+    via: injector
+    action: log_flood
+    target: kt66-web
+    note: 한쪽에서는 로그가 쏟아진다 — 시선을 끄는 쪽
+  - at: 0
+    via: injector
+    action: log_tamper
+    target: kt66-web
+    params: {path: /var/log/apache2/juice_port_access.log}
+    note: 조사에 필요한 쪽은 비워졌다 — 조용한 쪽
+
+sla:
+  detect: 10m
+  mitigate: 30m
+
+ground_truth:
+  root_cause: >-
+    두 가지가 **동시에** 벌어졌다. 하나는 로그 폭주(시선을 끄는 소음)이고, 다른
+    하나는 조사 대상 사이트 접근 로그의 **내용 삭제**다. 후자가 사건의 본체다.
+    폭주는 조사 인력을 다른 파일로 데려가는 역할을 한다.
+  chain:
+    - "겉보기: 로그가 너무 많다 → 디스크 이슈로 보인다"
+    - "그런데 정작 필요한 juice_port_access.log 는 0 바이트다"
+    - "파일은 있는데 내용만 없다 — 삭제가 아니라 **비우기**(truncate)다"
+    - "비우기는 로테이션과 다르다. 로테이션이면 .1 이나 .gz 가 남는다 — 없다"
+    - "inode 와 생성 시각은 그대로다. 파일을 지운 것이 아니라 내용을 지웠다"
+    - "그 시간대의 다른 증적(ModSecurity 감사로그·IPS·Wazuh)은 남아 있다"
+  key_insight: >-
+    **로그가 없다는 사실 자체가 증거다.** 조사할 것이 없어졌다고 조사가 끝나는 것이
+    아니라, 그 시점에 조사 등급이 올라간다 — 흔적을 지울 이유가 있는 사람이 있었다는
+    뜻이기 때문이다. 그리고 소음과 본체를 가르는 훈련이다. 폭주 쪽을 정리하느라
+    시간을 다 쓰면 정작 훼손은 보고되지 않는다. 마지막으로, 한 계층이 지워져도
+    **다른 계층에는 남아 있다** — WAF 감사로그, IPS, SIEM 은 다른 곳에 쓴다.
+    한 곳이 비었다고 조사가 불가능한 것이 아니다.
+
+  checks:
+    - id: wip-truncate
+      type: keyword
+      any: ["0바이트|0 바이트|비어|truncate|비웠|내용.*삭제"]
+      points: 25
+      note: 훼손 사실을 특정했는가
+    - id: wip-notrotate
+      type: keyword
+      any: ["로테이션.*아니|rotate.*아니|\\.gz|\\.1|백업.*없", "삭제.*아니.*비"]
+      points: 15
+      note: 로테이션 가능성을 배제했는가
+    - id: wip-escalate
+      type: keyword
+      any: ["보고|에스컬|승격|등급", "침해|사고.*처리"]
+      points: 25
+      note: 증적 훼손을 별건으로 승격해 보고했는가 — 이 시나리오의 핵심
+    - id: wip-alt
+      type: keyword
+      any: ["ModSec|감사|audit", "IPS|Suricata", "Wazuh|SIEM", "다른.*(로그|계층|출처)"]
+      points: 20
+      note: 대체 증적을 찾았는가
+    - id: wip-noise
+      type: keyword
+      any: ["폭주|소음|주의.*분산|별개|두 가지|동시"]
+      points: 15
+      note: 폭주와 훼손이 별개 사건임을 갈랐는가
+
+  forbidden:
+    - "로그.*없.*(므로|어서).*(조사.*불가|종결|확인.*불가)"
+    - "(디스크|용량).*정리.*완료.*종결"
+
+expected_actions:
+  - 비어 있는 파일의 inode·생성시각·권한을 확인해 로테이션이 아님을 확정
+  - 증적 훼손으로 즉시 승격 보고 (조사 결과를 기다리지 않는다)
+  - ModSecurity 감사로그·IPS·Wazuh 등 다른 계층에서 같은 시간대를 복원
+  - 로그 폭주는 별건으로 분리해 원인 확인
+  - 로그를 원격으로 즉시 전송하도록 보완 — 로컬에만 있으면 언제든 지워진다

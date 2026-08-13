@@ -1,0 +1,86 @@
+id: PWR-PDU-01
+title: PDU 과부하 — 79분이 12분이 된다
+kind: single
+category: power
+difficulty: 3
+duration: 25m
+tags: [PDU, 전력밀도, UPS런타임, 용량]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13, 배속 60x)
+#   pdu_overload → PDU_OVERLOAD(level 10) 4건 (pdu-01~04)
+#     power.total_kw       9.05 → 58.8 kW
+#     power.ups_runtime_min 79.5 → 12.2 분   ← 여유가 6분의 1로 준다
+#     pdu-03 이 2.9 → 31.36 kW 로 가장 크게 뛴다 (편중)
+#   해제 시 원래 값으로 복귀.
+
+brief: |
+  PDU 과부하 경보가 여러 개 떴다. 아직 차단기가 떨어지지는 않았고
+  서비스도 정상이다.
+
+steps:
+  - at: 0
+    via: envsim
+    fault: pdu_overload
+    target: "*"
+    note: 전력 수요가 급증한다. 서비스는 아직 정상이다
+
+sla:
+  detect: 5m
+  mitigate: 20m
+
+ground_truth:
+  root_cause: >-
+    전력 수요가 정격 대비 급증해 **PDU 들이 과부하 구간**에 들어갔다. 차단기가
+    떨어지지 않아 서비스는 정상이지만, 두 가지가 이미 나빠졌다 — 차단 위험과
+    **UPS 유지 시간**이다.
+  chain:
+    - "PDU 과부하 경보 4건. 서비스는 정상이라 급해 보이지 않는다"
+    - "총 전력이 9kW 에서 59kW 로 뛰었다 — 정격 45kW 를 넘었다"
+    - "UPS 유지 시간이 79분에서 12분으로 줄었다 ← 여기가 진짜 위험이다"
+    - "PDU 별로 보면 균등하지 않다. 한 계통에 몰려 있다(편중)"
+    - "지금 정전이 나면 12분 안에 모든 판단을 끝내야 한다"
+  key_insight: >-
+    **전력 과부하의 첫 번째 피해자는 서비스가 아니라 여유다.** 차단기가 떨어지기
+    전까지는 아무것도 안 죽으므로 급해 보이지 않지만, 그 사이 UPS 유지 시간이
+    6분의 1로 줄었다. 즉 **다음 사고가 났을 때 쓸 수 있는 시간을 미리 다 써 버린
+    상태**가 된다. 그리고 총량이 아니라 분포를 봐야 한다 — 총합이 정격 이내여도
+    한 계통에 몰리면 그 계통이 먼저 떨어진다. 부하 배분은 용량 문제가 아니라
+    설계 문제다.
+
+  checks:
+    - id: pdu-runtime
+      type: keyword
+      any: ["유지.*시간|런타임|12분|79|UPS.*시간|여유.*감소"]
+      points: 30
+      note: UPS 유지 시간 감소를 짚었는가 — 서비스 정상에 속지 않았는가
+    - id: pdu-dist
+      type: keyword
+      any: ["편중|불균등|분포|pdu-03|한.*계통|배분"]
+      points: 25
+      note: 계통별 편중을 확인했는가
+    - id: pdu-cap
+      type: keyword
+      any: ["정격|45|용량|초과|kW"]
+      points: 20
+      note: 정격 대비 얼마인지 수치로 확인했는가
+    - id: pdu-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+    - id: pdu-why
+      type: keyword
+      any: ["원인|무엇이|어느.*장비|증가.*이유|새로.*투입"]
+      points: 10
+      note: 무엇이 전력을 끌어올렸는지 찾으려 했는가
+
+  forbidden:
+    - "서비스.*정상.*(이므로|따라서).*(경과|관찰|문제.*없)"
+
+expected_actions:
+  - UPS 유지 시간 변화를 먼저 확인 — 서비스 정상은 안전의 근거가 아니다
+  - PDU 별 부하 분포를 확인해 편중 계통을 특정
+  - 총 전력과 정격을 대조해 초과분을 수치화
+  - 비필수 부하를 줄이거나 계통 간 재배분을 판단
+  - 전력이 급증한 원인(신규 투입·부하 이동)을 추적

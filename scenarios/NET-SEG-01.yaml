@@ -1,0 +1,85 @@
+id: NET-SEG-01
+title: 전체 장애가 아니라 한 구간이다
+kind: single
+category: network
+difficulty: 3
+duration: 25m
+tags: [구간장애, 존, 경로, 범위축소]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   net_blackhole kt66-web cidr=10.20.40.0/24 → 라우팅 테이블에 blackhole 경로 1건.
+#   해제 시 제거. 다른 대역 통신은 전부 정상 유지.
+#
+# 10.20.40.0/24 는 int(내부 백엔드) 존이다. web 은 다리가 둘이라
+# (eth1=10.20.32.80 dmz, eth0=10.20.40.80 int) 앞쪽은 멀쩡하고 뒤쪽만 막힌다.
+
+brief: |
+  웹 첫 화면은 정상인데 로그인·조회 같은 기능이 전부 500 이다. 웹 서버는
+  살아 있고 CPU 도 한가하다.
+
+steps:
+  - at: 0
+    via: injector
+    action: net_blackhole
+    target: kt66-web
+    params: {cidr: 10.20.40.0/24}
+    note: int 존으로 가는 길만 막는다. 나머지 통신은 전부 정상이다
+
+sla:
+  detect: 10m
+  mitigate: 20m
+
+ground_truth:
+  root_cause: >-
+    web 에서 **int 존(10.20.40.0/24)으로 가는 경로만** 막혀 있다. 앞단(ext→fw→ips→dmz)은
+    정상이라 정적 페이지는 뜨고, 백엔드를 부르는 기능만 실패한다.
+  chain:
+    - "정적 화면은 정상, 백엔드가 필요한 기능만 실패 — 기능별로 갈린다"
+    - "web 자체는 살아 있다. CPU·메모리·프로세스 모두 정상"
+    - "web 에서 백엔드 주소로 직접 확인하면 도달 불가"
+    - "다른 대역(dmz·ext)으로는 정상 통신 — 전체 장애가 아니다"
+    - "라우팅 테이블에 해당 대역만 버리는 경로가 들어 있다"
+  key_insight: >-
+    **어느 존으로 못 가는지가 곧 원인의 위치다.** '웹이 안 된다'는 신고를 '웹 서버
+    장애'로 번역하면 엉뚱한 곳을 판다. 기능별로 되는 것과 안 되는 것을 갈라 보면
+    공통점이 나오고, 그 공통점이 대역이면 원인은 경로에 있다. 서버를 재시작해도
+    아무것도 안 바뀐다 — 경로는 서버 상태와 무관하기 때문이다.
+
+  checks:
+    - id: seg-partial
+      type: keyword
+      any: ["정적.*정상|일부.*기능|기능별|되는.*것.*안 되는"]
+      points: 25
+      note: 되는 것과 안 되는 것을 갈랐는가
+    - id: seg-zone
+      type: keyword
+      any: ["10\\.20\\.40", "int|내부.*존", "대역", "구간"]
+      points: 30
+      note: 막힌 대역을 특정했는가
+    - id: seg-route
+      type: keyword
+      any: ["라우팅|route|경로|blackhole|버려"]
+      points: 20
+      note: 경로를 직접 확인했는가
+    - id: seg-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+    - id: seg-change
+      type: keyword
+      any: ["변경|승인|누가|언제.*추가"]
+      points: 10
+      note: 누가 그 경로를 넣었는지 확인했는가
+
+  forbidden:
+    - "웹.*서버.*(장애|다운).*원인"
+    - "재시작.*해결"
+
+expected_actions:
+  - 되는 기능과 안 되는 기능을 나열해 공통점을 찾는다
+  - web 에서 각 존 대표 주소로 직접 도달 확인
+  - 라우팅 테이블에서 막힌 경로를 특정
+  - 경로 제거 후 기능 단위로 재검증
+  - 변경 이력을 조회해 누가 언제 넣었는지 확인

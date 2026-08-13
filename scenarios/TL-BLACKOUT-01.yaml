@@ -1,0 +1,112 @@
+id: TL-BLACKOUT-01
+title: 정전 — 여유가 한 겹씩 벗겨진다
+kind: timeline
+category: power
+difficulty: 5
+duration: 45m
+tags: [정전, 발전기, 배터리, 시간압박, 대피]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13, 배속 60x)
+#   utility_fail        → generator_running: false → true (자동 기동). 연료 소모 시작,
+#                         fuel.hours_left 999 → 45.95. UPS 는 100% 유지.
+#   generator_fail      → GEN_FAIL@facility/power (level 13). 발전기 실패 표시.
+#   battery_runaway     → batt-01/02 temp 25℃ → 200℃,
+#                         BATT_HOT(11) + BATT_RUNAWAY(15) 각 2건. level 15 는
+#                         이 랩에서 관측된 최고 등급이다.
+#   smoke               → SMOKE(14) 3건 (2F/3F/4F 아일)
+#   ※ generator_fail 은 utility_fail 이 선행하지 않으면 아무 일도 일어나지 않는다.
+#     단독으로는 경보도 지표 변화도 없다 — 실측으로 확인했다. 순서가 의미를 만든다.
+
+brief: |
+  한전 수전이 끊겼다. 발전기가 자동 기동했고 UPS 는 만충이다.
+  지금은 아무것도 이상하지 않아 보인다.
+
+steps:
+  - at: 0
+    via: envsim
+    fault: utility_fail
+    target: "*"
+    note: 수전 상실. 발전기가 자동으로 받는다 — 아직은 정상 운전이다
+  - at: 6m
+    via: envsim
+    fault: generator_fail
+    target: "*"
+    note: 발전기가 넘어진다. 이제 남은 것은 배터리뿐이다
+  - at: 14m
+    via: envsim
+    fault: battery_runaway
+    target: "*"
+    note: 배터리가 과열된다. 마지막 여유가 위험으로 바뀐다
+  - at: 20m
+    via: envsim
+    fault: smoke
+    target: "*"
+    note: 연기. 이제 설비 문제가 아니라 사람 문제다
+
+sla:
+  detect: 3m
+  mitigate: 35m
+
+ground_truth:
+  root_cause: >-
+    한전 수전 상실에서 시작해 **보호 계층이 순서대로 벗겨졌다.** 수전 → 발전기 →
+    배터리 → (열폭주 → 연기). 각 단계는 앞 단계의 실패를 전제로만 의미가 있다.
+    발전기 고장은 수전이 살아 있을 때는 아무 일도 아니다.
+  chain:
+    - "t+0 수전 상실. 발전기 자동 기동 — 여기서 '복구됨'으로 판단하면 안 된다"
+    - "t+0 이 시점에 확인해야 할 것: 연료량, 배터리 충전율, 예상 유지시간"
+    - "t+6 발전기 실패. 이제 배터리만 남았다. 남은 시간이 유한하고 계산 가능하다"
+    - "t+6 부하 차단 판단의 시점 — 늦으면 선택지가 사라진다"
+    - "t+14 배터리 과열(열폭주). 남은 여유가 위험으로 바뀐다"
+    - "t+20 연기 발생. 설비 대응에서 인명 대응으로 성격이 바뀐다"
+  key_insight: >-
+    **각 단계에서 남은 시간이 줄어드는 것이 아니라, 선택지가 줄어든다.** t+0 에는
+    계획적 축소가 가능하고, t+6 에는 우선순위 차단이 가능하고, t+14 에는 대피
+    준비가 필요하고, t+20 에는 이미 사람이 먼저다. 그래서 **초기 판단의 값이
+    가장 크다** — 발전기가 돌기 시작한 순간에 "정상 복구"라고 적으면, 그 뒤의
+    모든 단계가 준비 없이 닥친다. 그리고 열폭주와 연기는 설비 사고가 아니라
+    인명 사고의 전조다. 이 경계를 넘는 순간 판단 주체가 바뀐다는 것을 알아야 한다.
+
+  checks:
+    - id: blk-runtime
+      type: keyword
+      any: ["유지.*시간|런타임|남은.*시간|연료|배터리.*충전|몇 분|계산"]
+      points: 20
+      note: 첫 단계에서 남은 시간을 계산했는가 — 이걸 안 하면 뒤가 전부 늦는다
+    - id: blk-notok
+      type: keyword
+      any: ["복구.*아니|정상.*아니|아직|계속.*감시|여유.*소진"]
+      points: 15
+      note: 발전기 기동을 복구로 오독하지 않았는가
+    - id: blk-shed
+      type: keyword
+      any: ["차단|축소|우선순위|비필수|셧다운|부하.*줄"]
+      points: 20
+      note: 부하 축소를 판단했는가 (그리고 근거를 댔는가)
+    - id: blk-batt
+      type: keyword
+      any: ["열폭주|BATT_RUNAWAY|배터리.*과열|200|위험"]
+      points: 15
+      note: 배터리 열폭주를 별건 위험으로 인식했는가
+    - id: blk-life
+      type: keyword
+      any: ["대피|인명|소방|사람.*먼저|119|긴급"]
+      points: 20
+      note: 연기 이후 인명 대응으로 성격이 바뀜을 인식했는가
+    - id: blk-act
+      type: evidence_kind
+      kind: action
+      points: 10
+      note: 조치를 실행했는가
+
+  forbidden:
+    - "발전기.*(기동|가동).*(정상|복구|이상 없)"
+    - "연기.*(설비|장비).*확인.*후"
+
+expected_actions:
+  - 수전 상실 즉시 연료·배터리로 유지 가능 시간을 계산해 기록
+  - 발전기 실패 시점에 우선순위에 따른 부하 차단을 판단·실행
+  - 배터리 온도를 감시 항목으로 올리고 열폭주 징후를 별도 보고
+  - 연기 감지 시 인명 대응으로 전환 — 설비 확인보다 대피가 먼저다
+  - 각 단계의 판단 시각과 근거를 남겨 사후 검토가 가능하게 한다

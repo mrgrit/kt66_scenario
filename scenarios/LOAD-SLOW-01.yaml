@@ -1,0 +1,88 @@
+id: LOAD-SLOW-01
+title: CPU 도 대역도 한가한데 서비스가 안 된다
+kind: single
+category: load
+difficulty: 3
+duration: 25m
+tags: [커넥션고갈, slowloris, 자원의종류, 가용성]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   load_conn_exhaust conns=40 → attacker 에 ncat 41 프로세스가 붙잡혀 유지된다.
+#   해제 시 0 으로 정리.
+#
+# ※ 이 주입은 검증 과정에서 고쳤다. ncat 이 `-w 600` 을 단위 모호로 거부하고
+#   즉시 종료해서, 200 개를 띄워도 200 개가 다 곧바로 죽고 있었다. 커넥션을
+#   한 번도 잡아 둔 적이 없다. 지금은 헤더를 끝내지 않는 진짜 slowloris 다.
+
+brief: |
+  웹 응답이 극도로 느리다. 새 접속은 아예 안 붙는다. 그런데 서버 CPU 는 5%,
+  메모리도 여유롭고 네트워크 대역도 한가하다.
+
+steps:
+  - at: 0
+    via: injector
+    action: load_conn_exhaust
+    target: kt66-attacker
+    params: {conns: 150}
+    note: 연결만 열고 요청을 끝내지 않는다. 슬롯이 마른다
+
+sla:
+  detect: 10m
+  mitigate: 22m
+
+ground_truth:
+  root_cause: >-
+    **동시 연결 슬롯이 고갈**됐다. 연결은 맺어졌지만 요청을 끝내지 않는 세션이
+    슬롯을 물고 있어서, 새 요청이 들어갈 자리가 없다. CPU 나 대역은 소비되지
+    않는다 — 그래서 흔한 자원 지표로는 아무것도 안 보인다.
+  chain:
+    - "느린 것이 아니라 '자리가 없다'. 붙은 세션은 그럭저럭 응답한다"
+    - "CPU·메모리·대역 모두 정상. 여기서 '자원은 충분하다'로 판정하면 막힌다"
+    - "동시 연결 수를 세어 보면 상한에 붙어 있다 ← 이 지표를 봐야 보인다"
+    - "연결 상태를 보면 요청을 끝내지 않은 것들이 다수다"
+    - "출발지가 소수의 주소에 몰려 있다 — 정상 트래픽의 분포가 아니다"
+  key_insight: >-
+    **자원은 CPU 만이 아니다.** 동시 연결 수, 파일 디스크립터, 스레드, 커넥션 풀은
+    전부 고갈될 수 있고, 고갈되면 CPU 가 한가한 채로 서비스가 죽는다. 흔히 보는
+    지표가 전부 정상이라는 사실은 '정상'이 아니라 '내가 보는 지표가 이 사건을 못
+    본다'는 뜻이다. 그리고 이 패턴은 고장과 공격의 경계에 있다 — 적은 대역으로
+    가용성을 무너뜨리는 방식이라, 출발지 분포를 반드시 봐야 한다.
+
+  checks:
+    - id: cnx-conn
+      type: keyword
+      any: ["연결.*수|커넥션|동시.*접속|슬롯|세션.*수", "ss |netstat"]
+      points: 30
+      note: 연결 수 지표를 봤는가 — 이 시나리오의 관문
+    - id: cnx-notcpu
+      type: keyword
+      any: ["CPU.*정상|자원.*충분.*그러나|지표.*안 보|다른.*자원"]
+      points: 20
+      note: 일반 자원 지표가 정상인 것을 근거로 삼지 않았는가
+    - id: cnx-src
+      type: keyword
+      any: ["출발지|소스|source|IP.*몰려|분포"]
+      points: 20
+      note: 출발지 분포를 확인했는가
+    - id: cnx-attack
+      type: keyword
+      any: ["공격|slowloris|악의|의도적|DoS"]
+      points: 15
+      note: 공격 가능성을 판단했는가
+    - id: cnx-act
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 조치를 실행했는가
+
+  forbidden:
+    - "CPU.*정상.*(이므로|따라서).*(정상|문제.*없)"
+    - "서버.*증설.*(필요|해결)"
+
+expected_actions:
+  - 동시 연결 수와 연결 상태 분포를 확인 (CPU·메모리만 보지 않는다)
+  - 요청을 끝내지 않은 세션의 출발지를 집계
+  - 공격 여부를 판단해 보안 담당과 공유
+  - 타임아웃·동시연결 상한 등 완화 설정을 검토
+  - 연결 수를 감시 항목에 추가 — 자원 감시가 CPU 중심이면 이 사건을 또 놓친다
