@@ -1,0 +1,81 @@
+/* kt66 시나리오 콘솔 — kt66 관제 화면과 같은 어두운 계열로 맞춘다.
+   강사가 두 화면을 오가며 쓰므로 색감이 갈리면 피로해진다. */
+:root{
+  --bg:#080d14; --panel:#0e1a27; --line:#1c2b3d; --ink:#dbe7f3; --dim:#7f93a8;
+  --acc:#4fc3f7; --ok:#3ddc97; --warn:#ffd93d; --bad:#ff4d6a; --gpu:#a78bfa;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.55 ui-sans-serif,system-ui,"Noto Sans KR",sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;gap:16px;
+  padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel);
+  position:sticky;top:0;z-index:9;flex-wrap:wrap}
+h1{margin:0;font-size:18px;letter-spacing:.02em}
+h1 span{color:var(--acc);font-weight:500}
+h2{font-size:15px;margin:0 0 10px;display:flex;align-items:center;gap:10px}
+h3{font-size:13px;margin:14px 0 8px;color:var(--dim)}
+.head-right{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--dim)}
+input,select{background:#0a1420;border:1px solid var(--line);color:var(--ink);
+  border-radius:6px;padding:6px 9px;font:inherit;font-size:13px}
+input:focus,select:focus{outline:1px solid var(--acc);border-color:var(--acc)}
+button{background:#152437;border:1px solid var(--line);color:var(--ink);
+  border-radius:6px;padding:6px 13px;font:inherit;font-size:13px;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--acc)}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.primary{background:var(--acc);color:#04121c;border-color:var(--acc);font-weight:600}
+button.ghost{font-size:12px;padding:3px 9px;color:var(--dim)}
+button.danger{border-color:var(--bad);color:var(--bad)}
+.pill{padding:3px 10px;border-radius:99px;border:1px solid var(--line);font-size:12px}
+.pill.ok{border-color:var(--ok);color:var(--ok)}
+.pill.bad{border-color:var(--bad);color:var(--bad)}
+
+nav.tabs{display:flex;gap:4px;padding:10px 20px 0;border-bottom:1px solid var(--line);
+  flex-wrap:wrap}
+.tab{border:none;border-bottom:2px solid transparent;border-radius:0;background:none;
+  color:var(--dim);padding:8px 14px}
+.tab.on{color:var(--acc);border-bottom-color:var(--acc)}
+.panel{display:none;padding:20px}
+.panel.on{display:block}
+
+.split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.4fr);gap:22px}
+@media(max-width:900px){.split{grid-template-columns:1fr}}
+.search{width:100%;margin-bottom:10px}
+.list{border:1px solid var(--line);border-radius:8px;max-height:62vh;overflow:auto}
+.item{padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.item:last-child{border-bottom:none}
+.item:hover{background:#111f2f}
+.item.on{background:#13283c;box-shadow:inset 3px 0 0 var(--acc)}
+.item .t{font-weight:600;margin-bottom:3px}
+.item .m{font-size:11.5px;color:var(--dim);display:flex;gap:8px;flex-wrap:wrap}
+.badge{padding:1px 7px;border-radius:99px;border:1px solid var(--line);font-size:11px}
+.k-single{color:var(--ok);border-color:var(--ok)}
+.k-composite{color:var(--warn);border-color:var(--warn)}
+.k-timeline{color:var(--gpu);border-color:var(--gpu)}
+.unver{color:var(--bad);border-color:var(--bad)}
+
+.detail{border:1px solid var(--line);border-radius:8px;padding:14px;
+  max-height:52vh;overflow:auto;background:#0b1622}
+.detail pre{white-space:pre-wrap;word-break:break-word;margin:6px 0;font-size:12.5px;
+  color:#b9cbdd;font-family:ui-monospace,Menlo,monospace}
+.detail ol,.detail ul{margin:6px 0;padding-left:20px}
+.detail li{margin:3px 0}
+.muted{color:var(--dim)}
+.err{color:var(--bad);font-size:12px;white-space:pre-wrap}
+.msg{font-size:12.5px;min-height:18px}
+.msg.ok{color:var(--ok)} .msg.bad{color:var(--bad)}
+
+.fire-box{margin-top:14px;border:1px solid var(--line);border-radius:8px;padding:14px;
+  display:flex;flex-direction:column;gap:9px;background:#0b1622}
+.fire-box label{display:flex;align-items:center;gap:8px;font-size:13px}
+.fire-box label.wide{flex-direction:column;align-items:stretch;gap:5px}
+.fire-box label.wide input{width:100%}
+.pick{font-size:12px}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-weight:500;font-size:12px}
+tbody tr:hover{background:#101d2b}
+.on-line{color:var(--ok)} .off-line{color:var(--dim)}
+.st-running{color:var(--warn)} .st-done{color:var(--ok)}
+.st-queued{color:var(--acc)} .st-cancelled,.st-failed{color:var(--bad)}
+.chk-pass{color:var(--ok)} .chk-fail{color:var(--bad)}

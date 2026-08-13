@@ -1,0 +1,18 @@
+# kt66_scenario — 강사용 중앙 시나리오 서버.
+# 학생 랩(kt66)과 **별도 호스트**에 두는 것이 정상이다. 같은 호스트에 둘 수도
+# 있으나, 강사 서버가 학생 랩 장애의 영향을 받으면 수업 운영이 함께 멈춘다.
+services:
+  scenario:
+    container_name: kt66s-server
+    build: ./server
+    environment:
+      INSTRUCTOR_KEY: ${INSTRUCTOR_KEY:-kt66s-instructor-2026}
+      POLL_HINT_SEC: ${POLL_HINT_SEC:-5}
+      TZ: Asia/Seoul
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${PORT:-8040}:8000"
+    volumes:
+      # 시나리오와 DB 는 이미지 밖. 수업 중 수정과 백업이 되어야 한다.
+      - ./scenarios:/scenarios:ro
+      - ./data:/app/data
+    restart: unless-stopped

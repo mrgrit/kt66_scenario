@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kt66 시나리오 콘솔</title>
+<link rel="stylesheet" href="/static/console.css">
+</head>
+<body>
+<header>
+  <h1>kt66 <span>시나리오 콘솔</span></h1>
+  <div class="head-right">
+    <label>강사 키 <input id="key" type="password" placeholder="INSTRUCTOR_KEY" autocomplete="off"></label>
+    <span id="health" class="pill">…</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab on" data-tab="fire">발사</button>
+  <button class="tab" data-tab="students">학생</button>
+  <button class="tab" data-tab="runs">진행</button>
+  <button class="tab" data-tab="auto">자동 발사</button>
+  <button class="tab" data-tab="board">채점</button>
+</nav>
+
+<!-- ── 발사 ─────────────────────────────────────────────── -->
+<section id="fire" class="panel on">
+  <div class="split">
+    <div class="col">
+      <h2>시나리오</h2>
+      <input id="scen-q" class="search" placeholder="검색 — 제목·태그·분류">
+      <div id="scen-list" class="list"></div>
+      <p id="scen-err" class="err"></p>
+    </div>
+    <div class="col">
+      <h2>상세</h2>
+      <div id="scen-detail" class="detail muted">왼쪽에서 시나리오를 고르세요.</div>
+      <div class="fire-box">
+        <h3>대상</h3>
+        <label><input type="radio" name="aud" value="all" checked> 전체 학생</label>
+        <label><input type="radio" name="aud" value="cohort"> 분반
+          <input id="aud-cohort" placeholder="A" size="6"></label>
+        <label><input type="radio" name="aud" value="students"> 특정 학생
+          <span id="aud-pick" class="pick muted">학생 탭에서 선택</span></label>
+        <button id="fire-btn" class="primary" disabled>발사</button>
+        <p id="fire-msg" class="msg"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 학생 ─────────────────────────────────────────────── -->
+<section id="students" class="panel">
+  <h2>등록된 학생 <button id="stu-refresh" class="ghost">새로고침</button></h2>
+  <p class="muted">체크한 학생이 발사 탭의 “특정 학생” 대상이 됩니다.</p>
+  <table id="stu-table"><thead><tr>
+    <th></th><th>이름</th><th>분반</th><th>호스트</th><th>상태</th><th>진행중</th><th>마지막 폴링</th>
+  </tr></thead><tbody></tbody></table>
+</section>
+
+<!-- ── 진행 ─────────────────────────────────────────────── -->
+<section id="runs" class="panel">
+  <h2>발사 이력 <button id="run-refresh" class="ghost">새로고침</button></h2>
+  <table id="run-table"><thead><tr>
+    <th>#</th><th>시나리오</th><th>학생</th><th>상태</th><th>단계</th><th>점수</th><th></th>
+  </tr></thead><tbody></tbody></table>
+  <div id="ev-box" class="detail" hidden></div>
+</section>
+
+<!-- ── 자동 발사 ────────────────────────────────────────── -->
+<section id="auto" class="panel">
+  <h2>자동 발사 일정</h2>
+  <p class="muted">간격마다 목록의 시나리오를 차례로(또는 무작위로) 쏩니다.</p>
+  <div class="fire-box">
+    <label>이름 <input id="sch-name" placeholder="1교시 환경계열"></label>
+    <label>간격(분) <input id="sch-every" type="number" value="15" min="1" size="4"></label>
+    <label>선택 <select id="sch-pick"><option value="sequence">순서대로</option>
+      <option value="random">무작위</option></select></label>
+    <label>대상 <input id="sch-aud" value="all" size="14"></label>
+    <label class="wide">시나리오 (쉼표 구분)
+      <input id="sch-list" placeholder="ENV-CRAC-01,ENV-CT-01"></label>
+    <button id="sch-add" class="primary">일정 추가</button>
+  </div>
+  <table id="sch-table"><thead><tr>
+    <th>#</th><th>이름</th><th>간격</th><th>대상</th><th>시나리오</th><th>다음</th><th></th>
+  </tr></thead><tbody></tbody></table>
+</section>
+
+<!-- ── 채점 ─────────────────────────────────────────────── -->
+<section id="board" class="panel">
+  <h2>채점 현황 <button id="bd-refresh" class="ghost">새로고침</button></h2>
+  <table id="bd-table"><thead><tr>
+    <th>학생</th><th>분반</th><th>시도</th><th>점수</th><th>탐지 SLA</th><th>조치 SLA</th><th>금지행위</th>
+  </tr></thead><tbody></tbody></table>
+</section>
+
+<script src="/static/console.js"></script>
+</body>
+</html>

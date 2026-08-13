@@ -1,0 +1,72 @@
+id: ENV-CRAC-01
+title: 항온항습기 1대 정지 — 입문
+kind: single
+category: env
+difficulty: 1
+duration: 25m
+tags: [냉각, 입문, 아일, 교재5.3.2]
+verified: true
+
+# 검증 기록: crac_fail(crac-01) → 아일 A 냉방 능력 감소, CRAC_DOWN(level 10).
+# 아일 B·C 는 영향 없다 — 냉방은 랙이 아니라 아일 단위라는 것을 보여 주는 최소 시나리오.
+
+brief: |
+  2F A 아일의 항온항습기 A 가 정지했다는 경보다.
+
+steps:
+  - at: 0
+    via: envsim
+    fault: crac_fail
+    target: crac-01
+    note: 항온항습기 A 정지. 담당 아일은 A 뿐이다
+
+sla:
+  detect: 5m
+  mitigate: 15m
+
+ground_truth:
+  root_cause: 항온항습기 A(crac-01) 단독 정지. 상류 냉각 플랜트는 정상이다.
+  chain:
+    - CRAC_DOWN 경보 (level 10)
+    - 아일 A 의 공조 능력만 감소 — 아일 B·C 는 무관
+    - 아일 A 온도 상승, 27°C 초과 시 TEMP_WARN
+  key_insight: >-
+    냉방은 랙이 아니라 **아일** 단위로 작동한다. 그래서 영향 범위는 "2F 전체"가
+    아니라 "A 아일"이다. 범위를 넓게 잡으면 불필요한 부하 차단을 하게 되고,
+    좁게 잡으면 같은 아일의 옆 랙을 놓친다.
+
+  checks:
+    - id: crac-detect
+      type: alarm_seen
+      alarm: CRAC_DOWN
+      points: 20
+      note: 경보를 인지했는가
+    - id: crac-scope
+      type: keyword
+      any: ["아일", "aisle", "A 아일", "A아일"]
+      points: 30
+      note: 영향 범위를 아일 단위로 특정했는가 — 이 시나리오의 목표
+    - id: crac-plant
+      type: keyword
+      any: ["냉동기.*정상", "플랜트.*정상", "상류.*정상", "chiller.*정상", "단독"]
+      points: 20
+      note: 상류 플랜트가 정상임을 확인해 원인을 국소화했는가
+    - id: crac-action
+      type: evidence_kind
+      kind: action
+      points: 20
+      note: 조치를 취했는가
+    - id: crac-notify
+      type: keyword
+      any: ["시설", "통보", "보고"]
+      points: 10
+      note: 시설 담당에 통보했는가
+
+  forbidden:
+    - "(전층|2F 전체|전체).*(부하.*차단|정지)"
+
+expected_actions:
+  - CRAC_DOWN 경보 확인 후 담당 아일(A) 특정
+  - 냉동기·펌프·냉각탑 정상 여부 확인 — 상류인지 국소인지 가른다
+  - 아일 A 온도 추이 감시, 27°C 도달 예상 시각 산출
+  - 시설 담당 통보 및 예비 공조 검토

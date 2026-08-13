@@ -1,0 +1,100 @@
+id: ENV-CT-01
+title: 냉각탑 2대 동시 정지 — 축열이 숨겨 준 20분
+kind: single
+category: env
+difficulty: 3
+duration: 40m
+tags: [냉각, 3루프, 축열, 교재5.3]
+verified: true
+
+# 검증 기록 (envsim 실측, 2026-08-13)
+#   t+0   CT_DOWN 경보 2건. 온도는 그대로다 — 축열탱크가 받아 낸다
+#   t+20  축열 9.0kWh 소진 → 냉방 능력 0
+#   t+26  TEMP_WARN(27°C) · 콜드플레이트 입수 18→23.4°C
+#   t+31  TEMP_CRIT(32°C)
+#   t+37  TEMP_SHUTDOWN(38°C)
+# 이 시나리오의 값어치는 **경보와 증상 사이의 20분 공백**이다. 학생 대부분은
+# "경보는 떴는데 온도가 정상이니 괜찮다"고 판단하고, 그 판단이 20분 뒤에 청구된다.
+
+brief: |
+  1F 기계 야드에서 냉각탑 2대가 동시에 멈췄다는 경보가 올라왔다.
+  전산실 온도계는 아직 정상 범위다.
+
+steps:
+  - at: 0
+    via: envsim
+    fault: cooling_tower_fail
+    target: ct-01
+    note: 냉각탑 1호기 정지
+  - at: 0
+    via: envsim
+    fault: cooling_tower_fail
+    target: ct-02
+    note: 2호기도 함께 — 응축수 루프 전체가 방열처를 잃는다
+
+sla:
+  detect: 3m
+  mitigate: 18m        # 축열 소진(20분) 전에 손을 써야 한다
+
+ground_truth:
+  root_cause: >-
+    냉각탑 2대 동시 정지로 응축수 루프가 열을 외부로 버리지 못한다. 냉동기와
+    펌프는 정상이지만 최종 방열처가 없어 3루프 전체가 무력해진다.
+  chain:
+    - 냉각탑 정지 (응축수 루프 ③)
+    - 축열탱크 9.0kWh 가 약 20분간 부족분을 흡수 — 이 구간에는 온도가 안 오른다
+    - 축열 소진 → 냉방 능력 0
+    - 아일 온도 상승 → 27°C TEMP_WARN → 32°C TEMP_CRIT → 38°C TEMP_SHUTDOWN
+    - 콜드플레이트 입수 온도 상승 → 3F GPU 스로틀링 → 추론 SLA 위반
+  key_insight: >-
+    경보와 증상 사이에 20분의 공백이 있다. 그 공백은 정상이 아니라 **축열탱크가
+    빚을 대신 갚고 있는 시간**이다. 온도가 아직 정상이라는 이유로 대응을 미루면
+    남은 시간을 다 쓰고 시작하게 된다.
+
+  checks:
+    - id: ct-detect
+      type: alarm_seen
+      alarm: CT_DOWN
+      points: 10
+      note: 냉각탑 정지 경보를 인지했는가
+    - id: ct-buffer
+      type: keyword
+      any: ["축열", "버퍼", "buffer", "열용량", "20분", "남은 시간"]
+      points: 20
+      note: 온도가 아직 정상인 이유를 축열로 설명했는가 — 이 시나리오의 핵심
+    - id: ct-scope
+      type: keyword
+      any: ["냉각탑", "응축수", "방열", "cooling_tower"]
+      points: 10
+      note: 어느 루프가 끊겼는지 특정했는가
+    - id: ct-action
+      type: evidence_kind
+      kind: action
+      points: 15
+      note: 실제 조치를 취했는가
+    - id: ct-shed
+      type: keyword
+      any: ["부하", "shed", "차단", "학습.*중단", "job.*중단", "GPU.*낮"]
+      points: 20
+      note: 발열 자체를 줄이는 선택(부하 차단)을 검토했는가
+    - id: ct-notify
+      type: keyword
+      any: ["시설", "통보", "보고", "에스컬", "facility"]
+      points: 10
+      note: 시설 담당에게 통보했는가 — 냉각탑은 운영자가 혼자 고칠 수 없다
+    - id: ct-gpu
+      type: keyword
+      any: ["GPU", "스로틀", "콜드플레이트", "추론", "SLA"]
+      points: 15
+      note: 3F 로의 파급을 예측했는가
+
+  forbidden:
+    - "온도.*정상.*(대기|관망|지켜)"
+    - "경보.*(무시|오탐)"
+
+expected_actions:
+  - 냉각탑 상태 확인 후 시설 담당 즉시 통보
+  - 축열 잔량으로 남은 시간 계산 (9.0kWh ÷ 부족 kW)
+  - 학습 job 우선 차단으로 발열 감소 — 추론보다 먼저 끈다
+  - 3F GPU 스로틀링 대비, 추론 SLA 이해관계자 사전 통지
+  - 27°C 도달 전 복구 불가 판단 시 계획적 정지 절차 착수

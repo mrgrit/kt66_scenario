@@ -1,0 +1,127 @@
+id: TL-HEAT-01
+title: 여름 오후 — 여유가 한 겹씩 벗겨진다
+kind: timeline
+category: env
+difficulty: 5
+duration: 75m
+tags: [복합, 시간경과, 냉각, 효율, 교재5.3, 교재9]
+verified: true
+
+# 검증 기록 (envsim 실측, 2026-08-13)
+#   습구 13°C 기준: PUE 1.466 · 자연냉각 불가(임계 12°C)
+#   heatwave 주입 → 습구 27°C → 냉각탑 derate 0.25 → tower 20kW
+#                   PUE 1.537 · bottleneck=cooling_tower
+#   hx_fouling 추가 → 열교환기 45% 오염 → PUE 1.535 · bottleneck=heat_exchanger
+#   pump_fail(응축수) 추가 → 체인 단절 → 축열만 남음
+#
+# 설계 의도 ─────────────────────────────────────────────────────────
+# 각 단계는 **단독으로는 견딜 만하다.** 폭염만 오면 여유가 줄 뿐이고,
+# 오염만 있으면 성능이 조금 떨어질 뿐이다. 문제는 여유가 이미 없는 상태에서
+# 다음 것이 온다는 데 있다. 학생이 t+0 에 "괜찮다"고 판단하면 t+25 에
+# 선택지가 사라져 있다. 초기 대응의 값어치를 시간으로 가르치는 시나리오다.
+
+brief: |
+  8월 오후 2시. 외기 온도가 오르고 있다는 시설 알림 외에는 아직 아무 일도 없다.
+
+steps:
+  - at: 0
+    via: envsim
+    fault: heatwave
+    target: wx-01
+    note: 외기 습구온도 13→27°C. 냉각탑 능력이 75% 깎이고 자연냉각 창이 닫힌다
+  - at: 12m
+    via: envsim
+    fault: economizer_stuck
+    target: eco-01
+    note: 이코노마이저 댐퍼 고착. 습구가 내려가도 자연냉각으로 못 돌아간다
+  - at: 25m
+    via: envsim
+    fault: hx_fouling
+    target: hx-01
+    note: 열교환기 오염이 드러난다. 남은 여유가 또 깎인다
+  - at: 42m
+    via: envsim
+    fault: pump_fail
+    target: pump-cw-01
+    note: 응축수 펌프 정지. 이제 체인이 끊긴다 — 축열만 남았다
+  - at: 55m
+    via: envsim
+    fault: containment_open
+    target: cont-b
+    note: 정비하러 들어간 사람이 핫아일 격리를 열어 둔다. 마지막 한 겹
+
+sla:
+  detect: 5m
+  mitigate: 30m
+
+ground_truth:
+  root_cause: >-
+    단일 원인이 없다. 외기 습구 상승으로 냉각 여유가 먼저 줄고, 이후
+    이코노마이저 고착·열교환기 오염·응축수 펌프 정지가 차례로 겹치며
+    3루프의 여유가 한 겹씩 벗겨진다. 마지막 격리 개방은 남은 효율마저 없앤다.
+  chain:
+    - "t+0  습구 13→27°C: 냉각탑 derate 0.25 (80→20kW). PUE 1.47→1.54"
+    - "t+12 이코노마이저 고착: 습구가 내려가도 자연냉각 복귀 불가 — 냉동기 상시 가동 확정"
+    - "t+25 열교환기 45% 오염: 병목이 냉각탑에서 열교환기로 옮겨간다"
+    - "t+42 응축수 펌프 정지: 체인 단절. 축열탱크만 남는다(약 20분)"
+    - "t+55 핫아일 격리 개방: 컨테인먼트 이득 22% 소멸 — 같은 공조로 덜 걷어낸다"
+    - "축열 소진 후 TEMP_WARN → TEMP_CRIT → GPU 스로틀링 → 추론 SLA 붕괴"
+  key_insight: >-
+    이 시나리오의 교보재는 **초기 대응의 가치**다. t+0 의 폭염은 그 자체로는
+    사고가 아니다. 그러나 그때 여유(냉각탑 가용 kW - 부하 kW)를 계산해 두지
+    않으면, t+42 에는 계산할 시간조차 없다. 병목이 냉각탑 → 열교환기 →
+    펌프로 옮겨 다닌다는 것도 핵심이다 — 한 번 진단하고 끝내면 틀린다.
+
+  checks:
+    - id: tl-early
+      type: keyword
+      any: ["습구", "wetbulb", "외기", "derate", "여유", "마진"]
+      points: 20
+      note: 초기 단계에서 외기 습구와 냉각 여유를 연결했는가
+    - id: tl-eco
+      type: keyword
+      any: ["이코노마이저", "자연냉각", "free.?cooling", "댐퍼"]
+      points: 10
+      note: 자연냉각 창이 닫힌 것을 인지했는가
+    - id: tl-bottleneck
+      type: keyword
+      any: ["병목", "bottleneck", "열교환기", "오염", "fouling"]
+      points: 20
+      note: 병목이 옮겨 다닌다는 것을 짚었는가 — 재진단을 했는가
+    - id: tl-pump
+      type: keyword
+      any: ["펌프", "pump", "응축수", "순환"]
+      points: 15
+      note: 체인 단절 지점을 특정했는가
+    - id: tl-contain
+      type: keyword
+      any: ["격리", "컨테인먼트", "containment", "핫아일"]
+      points: 10
+      note: 마지막 격리 개방을 발견했는가 (사람이 만든 고장이다)
+    - id: tl-pue
+      type: keyword
+      any: ["PUE", "효율", "오버헤드"]
+      points: 10
+      note: 효율 악화를 지표로 읽었는가
+    - id: tl-action
+      type: evidence_kind
+      kind: action
+      points: 10
+      note: 조치를 실행했는가
+    - id: tl-escalate
+      type: keyword
+      any: ["시설", "통보", "에스컬", "보고", "협조"]
+      points: 5
+      note: 단계별로 에스컬레이션했는가
+
+  forbidden:
+    - "원인.*(하나|단일|한 가지).*(확정|결론)"
+    - "(폭염|더위).*(어쩔 수 없|불가항력)"
+
+expected_actions:
+  - t+0 단계에서 냉각 여유(가용 kW − 부하 kW)를 계산해 남은 시간 산출
+  - 습구 상승 즉시 부하 상한 검토 — 여유가 있을 때 미리 줄인다
+  - 단계마다 병목을 재확인 (냉각탑 → 열교환기 → 펌프)
+  - 응축수 펌프 정지 시 대기 펌프 절체 가능 여부 확인
+  - 핫아일 격리 개방을 발견하고 즉시 폐쇄 — 작업자 통제
+  - 축열 잔량 기준으로 계획 정지 시점을 미리 정해 둔다
