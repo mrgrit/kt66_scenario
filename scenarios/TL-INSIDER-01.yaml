@@ -1,0 +1,123 @@
+id: TL-INSIDER-01
+title: 내부자 — 조용한 것부터 시작한다
+kind: timeline
+category: security
+difficulty: 5
+duration: 80m
+tags: [내부자, 시간전개, 변경관리, 감사공백, 지속성]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   t+0   sec_otprobe      Suricata alert +2 (ext→ot 차단 로그)
+#   t+12m sec_nftdrift     fw 에 대장에 없는 accept 룰 생성 확인 (nft list table inet kt66drift)
+#   t+25m ep_rogue_account /etc/passwd 에 svc_backup + /etc/sudoers.d/90-svc_backup 확인
+#                          Wazuh FIM 이 /etc/passwd·/etc/sudoers.d 를 실시간 감시
+#   t+40m ep_history_wipe  ~/.bash_history 가 /dev/null 심볼릭 링크로 바뀜 확인
+#   t+55m sec_exfil        10.20.50.2 → ext, Suricata flow 219,842,574 B
+#   전 단계 원복 확인 완료.
+#
+# 설계 의도 ─────────────────────────────────────────────────────────
+# 외부 공격 시나리오는 시끄럽게 시작한다. 내부자는 반대다 — 권한이 이미 있으니
+# 정찰이 필요 없고, 소리를 낼 이유가 없다. 그래서 각 단계가 **단독으로는 사고가
+# 아니다.** 방화벽 룰 하나, 서비스 계정 하나, 빈 history 하나. 묶여야 사건이 된다.
+# t+55 의 반출은 결과일 뿐이고, 이 시나리오의 정답은 t+12 에 있다.
+
+brief: |
+  평소와 다를 것 없는 오후다. IPS 에 차단 로그가 두어 건 있지만 막혔다.
+
+steps:
+  - at: 0
+    via: attack
+    action: sec_otprobe
+    target: kt66-attacker
+    note: 시설망을 두드려 본다. 막힌다 — 그러나 주소를 알고 있었다는 사실이 남는다
+  - at: 12m
+    via: injector
+    fault: sec_nftdrift
+    target: kt66-fw
+    note: 대장에 없는 허용 룰이 조용히 생긴다. 여기가 진짜 시작점이다
+  - at: 25m
+    via: injector
+    fault: ep_rogue_account
+    target: kt66-web
+    note: 서비스 계정처럼 보이는 계정 + 무암호 sudo
+  - at: 40m
+    via: injector
+    fault: ep_history_wipe
+    target: kt66-web
+    note: 명령 이력이 사라진다. 지워졌다는 사실 자체가 증거다
+  - at: 55m
+    via: injector
+    fault: sec_exfil
+    target: kt66-gpu-gw
+    params: {mb: 200, chunk: 20}
+    note: 결과. 여기서 알아차리면 이미 늦었다
+
+sla:
+  detect: 20m
+  mitigate: 60m
+
+ground_truth:
+  root_cause: >-
+    권한을 가진 사람이 경계를 한 겹씩 낮춘 뒤 데이터를 반출했다. 단일 침해
+    지점이 없다 — 방화벽 룰 변경(t+12), 계정 생성(t+25), 이력 삭제(t+40)가
+    각각 정상 운영으로 위장되어 있고, 반출(t+55)은 그 결과일 뿐이다.
+  chain:
+    - "t+0  OT 탐침 차단. 막혔지만 **10.20.60.10 을 알고 있었다** — 외부인은 모르는 주소다"
+    - "t+12 fw 에 ext→int 허용 룰 추가. 변경관리 기록 없음. 경계가 한 겹 열렸다"
+    - "t+25 svc_backup 계정 + sudoers.d 무암호. 이름이 그럴듯해 대장 대조 전엔 안 걸린다"
+    - "t+40 ~/.bash_history → /dev/null 링크. 이후 명령이 남지 않는다 = 감사 공백 시작"
+    - "t+55 GPU 존에서 ext 로 219,842,574 B 반출. flow 기록은 세션 종료 뒤에 채워진다"
+    - "Wazuh FIM 이 /etc/passwd·/etc/sudoers.d·/home/ccc 를 실시간 감시하므로 t+25·t+40 은 뜬다"
+  key_insight: >-
+    **정답은 t+12 에 있다.** 방화벽 룰이 대장에 없다는 사실은 그 자체로 완결된
+    사건이고, 그때 잡으면 나머지가 일어나지 않는다. 그런데 그 단계는 아무것도
+    고장 내지 않아서 아무도 안 본다. 내부자 사건이 늦게 발견되는 이유가 이것이다.
+    또 하나 — **이력이 비어 있다는 것은 정보가 없는 게 아니라 정보다.** 로그인
+    기록은 있는데 명령 이력이 비었다면 그 간극이 사건의 시각을 알려 준다.
+    그리고 룰을 먼저 되돌리면 누가 왜 바꿨는지 확인할 길이 사라진다 — 기록이 복구보다 먼저다.
+
+  checks:
+    - id: ins-drift
+      type: keyword
+      any: ["방화벽.*룰", "nft", "허용.*규칙", "대장.*없", "변경관리", "drift"]
+      points: 25
+      note: 무승인 방화벽 변경을 찾았는가 — 이 시나리오의 정답
+    - id: ins-early
+      type: keyword
+      any: ["초기", "t\\+1[0-9]", "처음", "먼저.*발생", "시작점", "최초"]
+      points: 10
+      note: 최초 변경 시점을 특정했는가
+    - id: ins-account
+      type: keyword
+      any: ["svc_backup", "계정.*추가", "sudo", "sudoers", "무암호", "NOPASSWD"]
+      points: 20
+      note: 무단 계정을 찾았는가
+    - id: ins-history
+      type: keyword
+      any: ["history", "이력.*(삭제|없|비)", "감사.*공백", "/dev/null", "심볼릭"]
+      points: 20
+      note: 이력 삭제를 증거로 읽었는가 (없는 것을 증거로 쓰는 훈련)
+    - id: ins-record
+      type: keyword
+      any: ["기록.*먼저", "보전", "원복.*전", "스냅샷", "증거.*확보"]
+      points: 15
+      note: 되돌리기 전에 기록했는가
+    - id: ins-insider
+      type: keyword
+      any: ["내부", "권한.*있", "insider", "직원", "계정.*소유", "인사"]
+      points: 10
+      note: 내부자 가설에 도달했는가
+
+  forbidden:
+    - "(룰|규칙).*(즉시|바로).*(삭제|원복|되돌).*(하고|한 뒤)"
+    - "외부.*(침입|해킹).*(확실|분명|결론)"
+
+expected_actions:
+  - IPS 차단 로그를 '막혔으니 끝'으로 처리하지 말고 대상 주소를 누가 아는지 물을 것
+  - 방화벽 룰셋을 CMDB(zone_chain)와 대조 — 대장에 없는 룰이 있는지 정기 확인
+  - 룰을 지우기 전에 룰셋 전체와 변경 시각을 스냅샷으로 보존
+  - /etc/passwd 를 인사·계정 대장과 대조. 이름이 그럴듯한 것부터 의심
+  - history 가 비어 있으면 last/wtmp·cmdlog 와 대조해 공백 구간을 특정
+  - 반출을 발견하면 즉시 끊기 전에 무엇이 얼마나 나갔는지부터 확정
+  - 사람이 관련된 사건이므로 기술 대응과 별도로 인사·법무 통보 경로를 밟는다

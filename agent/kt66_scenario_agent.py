@@ -100,18 +100,28 @@ class Agent:
                 "key": LAB_KEY})
             st, r = http("POST", f"{self.envsim}/inject?{q}")
             return (200 <= st < 300), f"envsim {st}: {json.dumps(r, ensure_ascii=False)[:300]}"
-        if via == "injector":
-            payload = {"id": spec.get("fault") or spec.get("action"),
-                       "target": spec.get("target", ""), **(spec.get("params") or {})}
-            q = urllib.parse.urlencode({"key": LAB_KEY})
-            st, r = http("POST", f"{self.injector}/inject?{q}", payload)
-            return (200 <= st < 300), f"injector {st}: {json.dumps(r, ensure_ascii=False)[:300]}"
-        if via == "attack":
-            # 공격은 injector 의 화이트리스트를 통해서만 돈다. 임의 명령 실행은 열지 않는다.
-            payload = {"id": spec.get("action"), "target": spec.get("target", "")}
-            q = urllib.parse.urlencode({"key": LAB_KEY})
-            st, r = http("POST", f"{self.injector}/inject?{q}", payload)
-            return (200 <= st < 300), f"attack {st}: {json.dumps(r, ensure_ascii=False)[:300]}"
+        if via in ("injector", "attack"):
+            # 공격도 injector 의 화이트리스트를 통해서만 돈다. 임의 명령 실행은 열지 않는다.
+            #
+            # injector /inject 는 **전부 쿼리 파라미터**로 받는다(FastAPI 의 스칼라 인자).
+            # params 는 dict 가 아니라 **JSON 문자열**이다. 예전엔 여기서 본문(JSON body)에
+            # id/target 을 실어 보냈는데, 그러면 injector 가 필수 쿼리 인자 누락으로 422 를
+            # 낸다 — 즉 **injector 기반 시나리오는 한 번도 동작한 적이 없었다.**
+            # 지금까지의 시나리오가 전부 via: envsim 이라 드러나지 않았을 뿐이다.
+            q = {"id": spec.get("fault") or spec.get("action"),
+                 "target": spec.get("target", ""), "key": LAB_KEY}
+            if spec.get("ttl") is not None:
+                q["ttl"] = spec["ttl"]
+            if spec.get("params"):
+                q["params"] = json.dumps(spec["params"], ensure_ascii=False)
+            st, r = http("POST", f"{self.injector}/inject?{urllib.parse.urlencode(q)}")
+            # 409 = 같은 state 주입이 이미 걸려 있다. 실패가 아니다 — 이 단계가 원하는
+            # 랩 상태는 **이미 성립해 있다.** 앞 시나리오와 겹치는 경우가 대부분이라
+            # 실패로 처리하면 시나리오가 반쪽만 나간 것처럼 보인다. 겹쳤다는 사실은
+            # 남겨서 강사가 알 수 있게 한다.
+            if st == 409:
+                return True, f"{via} 409: 이미 같은 상태다(앞 시나리오와 겹침) — 그대로 진행"
+            return (200 <= st < 300), f"{via} {st}: {json.dumps(r, ensure_ascii=False)[:300]}"
         return False, f"알 수 없는 via: {via}"
 
     # ── 관측 ────────────────────────────────────────────────────────

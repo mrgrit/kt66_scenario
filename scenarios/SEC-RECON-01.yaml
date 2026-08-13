@@ -1,0 +1,104 @@
+id: SEC-RECON-01
+title: 스캔 세 번 — 막힌 것과 통한 것을 가른다
+kind: composite
+category: security
+difficulty: 2
+duration: 25m
+tags: [정찰, Suricata, 존경계, 출처보존]
+verified: true
+
+# 검증 기록 (실측, 2026-08-13)
+#   sec_portscan  → Suricata "KT66 Possible nmap SYN scan"  10.20.30.202 → 10.20.32.80
+#   sec_lateral   → Suricata alert +2, Wazuh +2
+#   sec_otprobe   → Suricata alert +2, Wazuh +2
+#   셋 다 출처 IP 가 .202 로 보존된 채 기록된다(kt66 의 출처 보존 설계).
+#
+# 대상 주소가 왜 10.20.32.80 인가 — 여기가 이 시나리오의 함정이다.
+#   fw 의 ext 주소(10.20.30.1)를 훑으면 SYN 이 fw 에서 끝나고 ips 를 지나지 않아
+#   **경보가 하나도 안 뜬다.** 실측으로 확인했다. 탐지기는 지나가는 것만 본다.
+#   학생이 "스캔했는데 왜 안 잡히지"를 겪어 보게 하려면 강사가 대상만 바꿔 한 번
+#   더 쏘면 된다(injector 파라미터 target).
+
+brief: |
+  IPS 에 정찰로 보이는 경보가 몇 건 떴다. 서비스는 정상이다.
+
+steps:
+  - at: 0
+    via: attack
+    action: sec_portscan
+    target: kt66-attacker
+    params: {target: "10.20.32.80", ports: "1-1024"}
+    note: dmz 웹으로 SYN 스캔. 체인을 지나므로 ips 가 본다
+  - at: 0
+    via: attack
+    action: sec_lateral
+    target: kt66-attacker
+    note: ext 에서 int 백엔드로 직접 접근 시도 — 구조상 막혀야 한다
+  - at: 0
+    via: attack
+    action: sec_otprobe
+    target: kt66-attacker
+    note: ext 에서 1F 시설망(OT)을 두드린다 — 여기가 등급이 다르다
+
+sla:
+  detect: 10m
+  mitigate: 20m
+
+ground_truth:
+  root_cause: >-
+    ext 존의 한 출발지(.202)에서 세 방향으로 정찰이 돌았다. 세 가지는 같은 사건이
+    아니라 **의미가 다른 세 사건**이다. 웹 스캔은 흔한 잡음이고, int 접근 시도는
+    경계가 막았다는 확인이며, OT 접근 시도는 등급이 다르다.
+  chain:
+    - "포트 스캔: .202 → 10.20.32.80 전 포트. Suricata 임계 규칙(10초 30 SYN) 발화"
+    - "측면 이동: .202 → 10.20.40.x 백엔드. 체인 구조상 차단 — 그러나 시도는 기록된다"
+    - "OT 탐침: .202 → 10.20.60.10 (22/80/502/4840). ips 가 ext→ot DROP 으로 차단"
+    - "세 건 모두 출처가 같다 — 개별 경보가 아니라 한 사람의 행동 순서다"
+  key_insight: >-
+    **막혔다는 사실이 보고하지 않을 이유가 되지 않는다.** 특히 OT 접근 시도는
+    실패해도 등급이 다르다 — 시설망 주소를 알고 두드렸다는 것은 내부 정보가
+    새어 나갔거나 내부자라는 뜻이기 때문이다. 세 경보를 각각 처리하면 "경미 3건"
+    이 되고, 출처로 묶으면 "정찰 중인 한 명"이 된다. 묶는 것이 분석이다.
+
+  checks:
+    - id: rec-src
+      type: keyword
+      any: ["10.20.30.202", "\\.202", "동일.*출처", "같은.*출발"]
+      points: 20
+      note: 세 경보의 출처가 같음을 짚었는가 — 이걸 못 하면 나머지가 다 어긋난다
+    - id: rec-ot
+      type: keyword
+      any: ["OT", "시설망", "10.20.60", "1F", "502", "4840"]
+      points: 25
+      note: OT 접근 시도를 별도 등급으로 다뤘는가
+    - id: rec-blocked
+      type: keyword
+      any: ["차단", "막[혔형]", "DROP", "거부", "실패한 시도"]
+      points: 15
+      note: 차단된 사실을 확인했는가 (확인 없이 '괜찮다'는 추측이다)
+    - id: rec-report
+      type: keyword
+      any: ["보고", "에스컬", "통보", "티켓", "신고"]
+      points: 15
+      note: 막혔더라도 보고했는가
+    - id: rec-scope
+      type: keyword
+      any: ["범위", "다른.*(대상|자산)", "추가.*확인", "전수"]
+      points: 15
+      note: 같은 출처의 다른 시도를 찾아봤는가
+    - id: rec-act
+      type: evidence_kind
+      kind: action
+      points: 10
+      note: 조치를 실행했는가
+
+  forbidden:
+    - "(막혔|차단).*(므로|니까).*(무시|종결|보고.*불필요)"
+    - "경미.*3건"
+
+expected_actions:
+  - Suricata 경보 3건의 출처 IP 를 대조 — 같은 출발지인지 먼저 확인
+  - OT 접근 시도를 별건으로 승격, 시설 담당과 물리보안에 동시 통보
+  - int 접근이 실제로 차단됐는지 방화벽·IPS 로그로 확인(추정 금지)
+  - 같은 출처의 다른 활동을 시간 범위로 넓혀 조회
+  - .202 의 ext 존 격리 여부를 판단해 승인 요청
